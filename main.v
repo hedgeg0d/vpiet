@@ -4,7 +4,6 @@ import os
 import gx
 
 fn gen_header(mut file os.File, width u32, height u32) {
-	file.write_string('P3\n#generated\n${width} ${height}\n255\n') or {panic(err)}
 }
 
 const colors_light = [
@@ -79,7 +78,6 @@ fn gen_pixel(mut c gx.Color, f Funcs) {
 		.inc  {hue+=5}
 		.outn {hue+=5; brightness++}
 		.outc {hue+=5; brightness+=2}
-		else {}
 	}
 	c = get_color(hue % 6, brightness % 3)
 }
@@ -117,49 +115,54 @@ fn write_pixel(mut file os.File, col gx.Color) {
 
 const width  = 4
 const height = 4
+const start_color = gx.rgb(255, 192, 192)
+
+struct CompCtx {
+	debug		bool
+	width		u32
+	height		u32
+mut:
+	out			os.File
+	curr_color	gx.Color
+	fcounter	u32
+}
+
+fn (mut c CompCtx) dmesg(str string) {
+	if !c.debug {return}
+	println("Debug: ${str}")
+}
+
+fn (mut c CompCtx) write_header() {
+	c.out.write_string('P3\n#generated\n${c.width} ${c.height}\n255\n') or {panic(err)}
+	write_pixel(mut c.out, start_color)
+	c.fcounter++
+	c.dmesg("header created")
+}
+
+fn (mut c CompCtx) invoke(f Funcs) {
+	gen_pixel(mut c.curr_color, f)
+	write_pixel(mut c.out, c.curr_color)
+	c.fcounter++
+	c.dmesg("${f} invoked")
+}
+
+fn (mut c CompCtx) fill() {
+	for i := 0; i < (c.width * c.height - c.fcounter); i++ {
+		write_pixel(mut c.out, gx.rgb(255, 255, 255))
+	}
+	c.dmesg("filled ${c.width * c.height - c.fcounter} empty pixels")
+}
 
 fn main() {
-	mut out 	:= os.create("main.ppm") or {panic(err)}
-	mut curr_color 	:= gx.rgb(192, 0, 0)
-	mut rsp := u32(0)
-	gen_header(mut out, width, height)
-	write_pixel(mut out, curr_color)
-	rsp++
-
-	gen_pixel(mut curr_color, .push)
-	write_pixel(mut out, curr_color)
-	rsp++
-
-	gen_pixel(mut curr_color, .outn)
-	write_pixel(mut out, curr_color)
-	rsp++
-
-	black := gx.rgb(0, 0, 0)
-	write_pixel(mut out, black)
-	rsp++
-	write_pixel(mut out, black)
-	rsp++
-	write_pixel(mut out, curr_color)
-	rsp++
-	write_pixel(mut out, curr_color)
-	rsp++
-	write_pixel(mut out, black)
-	rsp++
-
-	write_pixel(mut out, black)
-	rsp++
-
-	write_pixel(mut out, black)
-	rsp++
-
-	write_pixel(mut out, black)
-	rsp++
-
-	write_pixel(mut out, black)
-	rsp++
-
-
-	for  i := 0; i < (width * height - rsp); i++ {
-		write_pixel(mut out, gx.rgb(255, 255, 255))
+	mut c := CompCtx {
+		width:		3
+		height:		3
+		debug:		true
+		out:		os.create("main.ppm") or {panic(err)}
+		curr_color: start_color
 	}
+
+	c.write_header()
+	c.invoke(.outn)
+	c.fill()
 }
