@@ -53,33 +53,16 @@ enum Funcs {
 	outc	// cout char	(ASCII)
 }
 
-fn gen_pixel(mut c gx.Color, f Funcs) {
-	mut hue, mut brightness := rgb_to_params(c)
-	match f {
-		.push {brightness++}
-		.pop  {brightness+=2}
-		
-		.add {hue++}
-		.sub {hue++; hue++}
-		.mul {brightness+=2; hue++}
-		
-		.div {hue+=2}
-		.mod {hue+=2; brightness++}
-		.not {hue+=2; brightness+=2}
-		
-		.great   {hue+=3}
-		.pointer {hue+=3; brightness++}
-		.switch  {hue+=3; brightness+=2}
-		
-		.dup  {hue+=4}
-		.roll {hue+=4; brightness++}
-		.inn  {hue+=4; brightness+=2}
+enum Direction {
+	right
+	down
+	left
+	up
+}
 
-		.inc  {hue+=5}
-		.outn {hue+=5; brightness++}
-		.outc {hue+=5; brightness+=2}
-	}
-	c = get_color(hue % 6, brightness % 3)
+
+fn min(a int, b int) int {
+	return if a < b { a } else { b }
 }
 
 fn rgb_to_params(c gx.Color) (u8, u8) {
@@ -113,10 +96,6 @@ fn write_pixel(mut file os.File, col gx.Color) {
 	file.write_string("${col.r} ${col.g} ${col.b}\n") or {panic(err)}
 }
 
-const width  = 4
-const height = 4
-const start_color = gx.rgb(255, 192, 192)
-
 struct CompCtx {
 	debug		bool
 	width		u32
@@ -125,6 +104,10 @@ mut:
 	out			os.File
 	curr_color	gx.Color
 	fcounter	u32
+	lx			u32
+	ly			u32
+	dir			Direction
+	code		[][]gx.Color
 }
 
 fn (mut c CompCtx) dmesg(str string) {
@@ -134,14 +117,74 @@ fn (mut c CompCtx) dmesg(str string) {
 
 fn (mut c CompCtx) write_header() {
 	c.out.write_string('P3\n#generated\n${c.width} ${c.height}\n255\n') or {panic(err)}
-	write_pixel(mut c.out, start_color)
-	c.fcounter++
+	//write_pixel(mut c.out, start_color)
+	//c.fcounter++
 	c.dmesg("header created")
 }
 
+fn (mut c CompCtx) update_direction() {
+	layer := min(min(c.lx, c.width - 1 - c.lx), min(c.ly, c.height - 1 - c.ly))
+	layer_width := c.width - 2 * layer
+	layer_height := c.height - 2 * layer
+	local_x := c.lx - layer
+	local_y := c.ly - layer
+
+	if local_y == 0 && local_x < layer_width - 1 {
+		c.dir = .right
+	} else if local_x == layer_width - 1 && local_y < layer_height - 1 {
+		c.dir = .down
+	} else if local_y == layer_height - 1 && local_x > 0 {
+		c.dir = .left
+	} else if local_x == 0 && local_y > 1 {
+		c.dir = .up
+	} else {
+		// Этот случай возникает, когда мы завершаем внутренний слой
+		// и должны начать новый слой, двигаясь вправо
+		c.dir = .right
+	}
+}
+
+fn (mut c CompCtx) gen_pixel(f Funcs) {
+	mut hue, mut brightness := rgb_to_params(c.curr_color)
+	match f {
+		.push {brightness++}
+		.pop  {brightness+=2}
+		
+		.add {hue++}
+		.sub {hue++; hue++}
+		.mul {brightness+=2; hue++}
+		
+		.div {hue+=2}
+		.mod {hue+=2; brightness++}
+		.not {hue+=2; brightness+=2}
+		
+		.great   {hue+=3}
+		.pointer {hue+=3; brightness++}
+		.switch  {hue+=3; brightness+=2}
+		
+		.dup  {hue+=4}
+		.roll {hue+=4; brightness++}
+		.inn  {hue+=4; brightness+=2}
+
+		.inc  {hue+=5}
+		.outn {hue+=5; brightness++}
+		.outc {hue+=5; brightness+=2}
+	}
+	c.curr_color = get_color(hue % 6, brightness % 3)
+}
+
 fn (mut c CompCtx) invoke(f Funcs) {
-	gen_pixel(mut c.curr_color, f)
-	write_pixel(mut c.out, c.curr_color)
+	//gen_pixel(mut c.curr_color, f)
+	//write_pixel(mut c.out, c.curr_color)
+	c.update_direction()
+	match c.dir {
+		.right	{c.lx++}
+		.left	{c.lx--}
+		.up		{c.ly--}
+		.down	{c.ly++}
+	}
+	c.gen_pixel(f)
+	c.code[c.ly][c.lx] = c.curr_color
 	c.fcounter++
 	c.dmesg("${f} invoked")
 }
@@ -153,16 +196,62 @@ fn (mut c CompCtx) fill() {
 	c.dmesg("filled ${c.width * c.height - c.fcounter} empty pixels")
 }
 
+fn (mut c CompCtx) init() {
+	println("${c.width} ${c.height}")
+	c.write_header()
+	for _ in 0 .. c.height {
+		c.code << []gx.Color{init: gx.rgb(255, 255, 255), len: int(c.width)}
+	}
+	c.code[0][0] = start_color
+}
+
+fn (mut c CompCtx) end() {
+	for i in 0 .. c.height {
+		for j in 0 .. c.width {
+			c.out.write_string('${c.code[i][j].r} ${c.code[i][j].g} ${c.code[i][j].b}   ') or {panic(err)}
+		}
+		c.out.write_string('\n') or {panic(err)}
+	}
+}
+
+const width  = 6
+const height = 6
+const start_color = gx.rgb(255, 192, 192)
+
 fn main() {
 	mut c := CompCtx {
-		width:		3
-		height:		3
+		width:		width
+		height:		height
 		debug:		true
 		out:		os.create("main.ppm") or {panic(err)}
 		curr_color: start_color
 	}
 
-	c.write_header()
-	c.invoke(.outn)
-	c.fill()
+	c.init()
+	// some test invokes
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.push)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.add)
+	c.invoke(.push)
+	c.end()
 }
